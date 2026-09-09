@@ -7,16 +7,22 @@ import {
   TouchableOpacity,
   Animated,
   Easing,
+  Alert,
 } from 'react-native';
 import { theme } from '../utils/theme';
 import { AppIcon } from './AppIcon';
 import { ValidatedLocationInfo } from '../types/location';
 import { formatDistance } from '../utils/distanceUtils';
+import {
+  promptDeviceBiometricAuth,
+  checkDeviceBiometricsAvailable,
+  openDeviceSecuritySettings,
+} from '../services/deviceBiometricService';
 
 export interface FingerprintVerificationModalProps {
   visible: boolean;
   onClose: () => void;
-  onVerificationSuccess: () => void;
+  onVerificationSuccess: (signature?: string, payload?: string) => void;
   onVerificationFailed: () => void;
   employeeName?: string;
   validatedLocation?: ValidatedLocationInfo;
@@ -32,14 +38,88 @@ export const FingerprintVerificationModal: React.FC<
   employeeName = 'Pratiksha Patel',
   validatedLocation,
 }) => {
-  const [state, setState] = useState<'TOUCH' | 'SCANNING' | 'SUCCESS'>('TOUCH');
+  const [state, setState] = useState<'IDLE' | 'PROMPTING' | 'SUCCESS' | 'ERROR' | 'NOT_ENROLLED'>('IDLE');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [biometryType, setBiometryType] = useState<string>('Fingerprint');
 
   const radarAnim = useRef(new Animated.Value(0.8)).current;
   const opacityAnim = useRef(new Animated.Value(1)).current;
 
+  const showEnrollmentAlert = () => {
+    Alert.alert(
+      'No Fingerprint Enrolled',
+      'You have not added a fingerprint to this device. Please register your fingerprint in Phone Settings to use biometric attendance.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Open Settings',
+          onPress: () => {
+            openDeviceSecuritySettings();
+          },
+        },
+      ]
+    );
+  };
+
+  const triggerBiometricScan = async () => {
+    try {
+      setState('PROMPTING');
+      setErrorMessage(null);
+
+      // 1. Check if hardware biometric is available and enrolled
+      const availability = await checkDeviceBiometricsAvailable();
+      if (availability.biometryType) {
+        setBiometryType(availability.biometryType);
+      }
+
+      if (!availability.available) {
+        setState('NOT_ENROLLED');
+        setErrorMessage(
+          'No fingerprint registered on this phone. Please add a fingerprint in Phone Settings.'
+        );
+        showEnrollmentAlert();
+        return;
+      }
+
+      // Unique challenge payload tied to employee + timestamp + location
+      const payloadChallenge = `ATTENDANCE_${employeeName.replace(/\s+/g, '_')}_${Date.now()}`;
+
+      // 2. Prompt physical phone hardware sensor & sign with Keystore
+      const result = await promptDeviceBiometricAuth(
+        `Verify attendance for ${employeeName}`,
+        payloadChallenge
+      );
+
+      if (result.success) {
+        setState('SUCCESS');
+        setTimeout(() => {
+          onVerificationSuccess(result.signature, result.payload);
+        }, 900);
+      } else {
+        if (result.isNotEnrolled) {
+          setState('NOT_ENROLLED');
+          setErrorMessage(
+            'No fingerprint registered on this phone. Please add a fingerprint in Phone Settings.'
+          );
+          showEnrollmentAlert();
+        } else {
+          setState('ERROR');
+          setErrorMessage(
+            result.error || 'Fingerprint not recognized. Only enrolled fingers can punch in.'
+          );
+        }
+      }
+    } catch (err: any) {
+      console.error('[FingerprintModal] Biometric scan error:', err);
+      setState('ERROR');
+      setErrorMessage(err.message || 'Biometric verification failed.');
+    }
+  };
+
   useEffect(() => {
     if (!visible) {
-      setState('TOUCH');
+      setState('IDLE');
+      setErrorMessage(null);
       return;
     }
 
@@ -61,38 +141,45 @@ export const FingerprintVerificationModal: React.FC<
 
     radarLoop.start();
 
-    // Automated biometric sensor simulation
-    const t1 = setTimeout(() => {
-      setState('SCANNING');
-    }, 1200);
-
-    const t2 = setTimeout(() => {
-      setState('SUCCESS');
-    }, 2800);
-
-    const t3 = setTimeout(() => {
-      onVerificationSuccess();
-    }, 3800);
+    // Trigger physical biometric prompt when modal opens
+    const timer = setTimeout(() => {
+      triggerBiometricScan();
+    }, 400);
 
     return () => {
       radarLoop.stop();
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
+      clearTimeout(timer);
     };
   }, [visible]);
 
   if (!visible) return null;
 
+  const isNotEnrolled = state === 'NOT_ENROLLED';
+  const isError = state === 'ERROR' || isNotEnrolled;
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
-          {/* Top Grab / Close */}
+          {/* Top Header */}
           <View style={styles.topHeader}>
             <View style={styles.badgeRow}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>DEVICE BIOMETRIC</Text>
+              <View
+                style={[
+                  styles.liveDot,
+                  isError && { backgroundColor: theme.colors.danger },
+                  state === 'SUCCESS' && { backgroundColor: theme.colors.success },
+                ]}
+              />
+              <Text
+                style={[
+                  styles.liveText,
+                  isError && { color: theme.colors.danger },
+                  state === 'SUCCESS' && { color: theme.colors.success },
+                ]}
+              >
+                HARDWARE BIOMETRIC ({biometryType.toUpperCase()})
+              </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <Text style={styles.closeBtnText}>✕</Text>
@@ -106,45 +193,69 @@ export const FingerprintVerificationModal: React.FC<
             </Text>
           )}
 
-          {/* Sensor Scan Icon with Pulsing Radar Ring */}
+          {/* Biometric Sensor Icon / Scan Circle */}
           <View style={styles.sensorContainer}>
-            <Animated.View
-              style={[
-                styles.radarRing,
-                {
-                  transform: [{ scale: radarAnim }],
-                  opacity: opacityAnim,
-                },
-              ]}
-            />
+            {!isError && state !== 'SUCCESS' ? (
+              <Animated.View
+                style={[
+                  styles.radarRing,
+                  {
+                    transform: [{ scale: radarAnim }],
+                    opacity: opacityAnim,
+                  },
+                ]}
+              />
+            ) : null}
+
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={() => {
-                setState('SUCCESS');
-                setTimeout(() => onVerificationSuccess(), 600);
-              }}
+              onPress={isNotEnrolled ? openDeviceSecuritySettings : triggerBiometricScan}
               style={[
                 styles.sensorCircle,
                 state === 'SUCCESS' && styles.sensorCircleSuccess,
+                isError && styles.sensorCircleError,
               ]}
             >
-              <AppIcon
-                name={state === 'SUCCESS' ? 'check' : 'fingerprint'}
-                size={54}
-                color={state === 'SUCCESS' ? theme.colors.success : theme.colors.purple}
-              />
+              {state === 'SUCCESS' ? (
+                <AppIcon name="check" size={54} color={theme.colors.success} />
+              ) : isError ? (
+                <AppIcon name="alert-circle" size={50} color={theme.colors.danger} />
+              ) : (
+                <AppIcon name="fingerprint" size={54} color={theme.colors.purple} />
+              )}
             </TouchableOpacity>
           </View>
 
-          {/* Status Instructions */}
-          <Text style={styles.instructionText}>
-            {state === 'TOUCH'
-              ? 'Touch the fingerprint sensor'
-              : state === 'SCANNING'
-              ? 'Authenticating fingerprint…'
-              : 'Biometric Authenticated!'}
+          {/* Status Instruction Text */}
+          <Text
+            style={[
+              styles.instructionText,
+              isError && styles.errorInstructionText,
+              state === 'SUCCESS' && styles.successInstructionText,
+            ]}
+          >
+            {state === 'PROMPTING'
+              ? 'Touch the phone fingerprint sensor...'
+              : state === 'SUCCESS'
+              ? 'Enrolled Fingerprint Verified!'
+              : isNotEnrolled
+              ? 'No Fingerprint Enrolled on Device'
+              : state === 'ERROR'
+              ? errorMessage || 'Fingerprint not recognized'
+              : 'Tap sensor to scan fingerprint'}
           </Text>
 
+          {isNotEnrolled ? (
+            <Text style={styles.errorSubtext}>
+              Please register your fingerprint in your phone's Security Settings to punch in.
+            </Text>
+          ) : state === 'ERROR' ? (
+            <Text style={styles.errorSubtext}>
+              Only fingers registered in your phone's lock screen settings are accepted. PIN/Pattern fallback is disabled.
+            </Text>
+          ) : null}
+
+          {/* Action Buttons */}
           <View style={styles.btnRow}>
             <TouchableOpacity
               style={styles.cancelBtn}
@@ -154,13 +265,31 @@ export const FingerprintVerificationModal: React.FC<
               <Text style={styles.cancelBtnText}>Cancel</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.instantVerifyBtn}
-              onPress={onVerificationSuccess}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.instantVerifyText}>Instant Verify</Text>
-            </TouchableOpacity>
+            {isNotEnrolled ? (
+              <TouchableOpacity
+                style={styles.settingsBtn}
+                onPress={openDeviceSecuritySettings}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.settingsBtnText}>⚙️ Open Settings</Text>
+              </TouchableOpacity>
+            ) : state === 'ERROR' ? (
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={triggerBiometricScan}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.retryBtnText}>Scan Again</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.scanBtn}
+                onPress={triggerBiometricScan}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.scanBtnText}>Scan Sensor</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </View>
@@ -243,7 +372,7 @@ const styles = StyleSheet.create({
     height: 140,
     justifyContent: 'center',
     alignItems: 'center',
-    marginVertical: 28,
+    marginVertical: 24,
   },
   radarRing: {
     position: 'absolute',
@@ -273,17 +402,36 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.success,
     shadowColor: theme.colors.success,
   },
+  sensorCircleError: {
+    borderColor: theme.colors.danger,
+    shadowColor: theme.colors.danger,
+  },
   instructionText: {
     fontSize: 14,
     fontWeight: '600',
     color: theme.colors.text,
-    marginBottom: 20,
+    marginBottom: 8,
     textAlign: 'center',
+  },
+  errorInstructionText: {
+    color: theme.colors.danger,
+  },
+  successInstructionText: {
+    color: theme.colors.success,
+  },
+  errorSubtext: {
+    fontSize: 11,
+    color: theme.colors.textMuted,
+    textAlign: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 10,
+    lineHeight: 15,
   },
   btnRow: {
     flexDirection: 'row',
     width: '100%',
     gap: 10,
+    marginTop: 8,
   },
   cancelBtn: {
     flex: 1,
@@ -298,14 +446,38 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  instantVerifyBtn: {
+  settingsBtn: {
+    flex: 1.2,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: theme.colors.primaryLight,
+    alignItems: 'center',
+  },
+  settingsBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  retryBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: theme.colors.danger,
+    alignItems: 'center',
+  },
+  retryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  scanBtn: {
     flex: 1,
     paddingVertical: 11,
     borderRadius: 12,
     backgroundColor: theme.colors.purple,
     alignItems: 'center',
   },
-  instantVerifyText: {
+  scanBtnText: {
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',

@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   StatusBar,
   Platform,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { theme } from '../utils/theme';
@@ -15,37 +16,82 @@ import { PunchInButton } from '../components/PunchInButton';
 import { AttendanceSummaryCard } from '../components/AttendanceSummaryCard';
 import { AttendanceHistoryList } from '../components/AttendanceHistoryList';
 import { FaceRegistrationModal } from '../components/FaceRegistrationModal';
+import { BiometricEnrollmentModal } from '../components/BiometricEnrollmentModal';
+import { UserProfileHeader } from '../components/UserProfileHeader';
 import { INITIAL_RECORDS } from '../services/attendanceService';
 import { AttendanceRecord } from '../types/attendance';
+import { AppUser } from '../types/auth';
 import {
   getEmployeeFaceProfile,
   EmployeeFaceProfile,
 } from '../services/faceBiometricService';
+import {
+  checkDeviceBiometricsAvailable,
+  openDeviceSecuritySettings,
+} from '../services/deviceBiometricService';
 
-export const AttendanceRegisterScreen: React.FC = () => {
+interface AttendanceRegisterScreenProps {
+  currentUser?: AppUser | null;
+  onSignOut?: () => void;
+}
+
+export const AttendanceRegisterScreen: React.FC<AttendanceRegisterScreenProps> = ({
+  currentUser,
+  onSignOut,
+}) => {
   const insets = useSafeAreaInsets();
   const [records, setRecords] = useState<AttendanceRecord[]>(INITIAL_RECORDS);
+  const [biometricModalVisible, setBiometricModalVisible] = useState(false);
   const [faceRegisterModalVisible, setFaceRegisterModalVisible] = useState(false);
   const [faceProfile, setFaceProfile] = useState<EmployeeFaceProfile | null>(null);
+  const [isFingerprintEnrolled, setIsFingerprintEnrolled] = useState(false);
+  const [biometryType, setBiometryType] = useState('Fingerprint');
+
+  const refreshBiometrics = async () => {
+    // 1. Fetch Face Profile
+    const prof = await getEmployeeFaceProfile('EMP-1024');
+    setFaceProfile(prof);
+
+    // 2. Fetch Device Fingerprint status
+    const bioStatus = await checkDeviceBiometricsAvailable();
+    setIsFingerprintEnrolled(bioStatus.available);
+    if (bioStatus.biometryType) {
+      setBiometryType(bioStatus.biometryType);
+    }
+  };
 
   useEffect(() => {
-    getEmployeeFaceProfile('EMP-1024').then((prof) => {
-      setFaceProfile(prof);
+    refreshBiometrics();
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        refreshBiometrics();
+      }
     });
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   const handlePunchSuccess = (newRecord: AttendanceRecord) => {
     setRecords((prev) => [newRecord, ...prev]);
   };
 
-  const isEnrolled = Boolean(faceProfile && faceProfile.face_registered);
+  const isFaceEnrolled = Boolean(faceProfile && faceProfile.face_registered);
   const todayRecords = records.filter(
     (r) => r.date === 'Today' && r.status !== 'REJECTED' && r.status !== 'FAILED'
   );
   const todayInRecord = todayRecords.find((r) => r.punchType === 'IN');
   const todayOutRecord = todayRecords.find((r) => r.punchType === 'OUT');
   const isPunchedInToday = Boolean(todayInRecord && !todayOutRecord);
-  const topPadding = Math.max(insets.top, Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 20);
+  const topPadding = Math.max(
+    insets.top,
+    Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 20
+  );
+  const userInitials = currentUser?.displayName
+    ? currentUser.displayName.substring(0, 2).toUpperCase()
+    : 'PP';
 
   return (
     <View style={[styles.screenContainer, { paddingBottom: insets.bottom }]}>
@@ -55,14 +101,14 @@ export const AttendanceRegisterScreen: React.FC = () => {
       <View style={[styles.topBar, { paddingTop: topPadding + 6 }]}>
         <View style={styles.topBarLeft}>
           <View style={styles.avatarWrap}>
-            <Text style={styles.avatarText}>PP</Text>
+            <Text style={styles.avatarText}>{userInitials}</Text>
           </View>
           <View style={styles.titleColumn}>
             <Text style={styles.brandTitle} numberOfLines={1}>
-              Attendance Register
+              {currentUser?.displayName || 'Attendance Register'}
             </Text>
             <Text style={styles.brandSubtitle} numberOfLines={1}>
-              Headquarters & Tech Center
+              {currentUser?.email || 'Headquarters & Tech Center'}
             </Text>
           </View>
         </View>
@@ -80,6 +126,11 @@ export const AttendanceRegisterScreen: React.FC = () => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* User Profile Card with Sign Out if signed in */}
+        {currentUser && onSignOut ? (
+          <UserProfileHeader user={currentUser} onSignOut={onSignOut} />
+        ) : null}
+
         {/* Attendance Summary Dashboard Card */}
         <AttendanceSummaryCard
           records={records}
@@ -99,84 +150,129 @@ export const AttendanceRegisterScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Face Profile Registration Banner */}
-        <View style={styles.faceEnrollCard}>
-          <View style={styles.faceEnrollLeft}>
-            <View
-              style={[
-                styles.faceIconCircle,
-                {
-                  backgroundColor: isEnrolled ? '#10B9811A' : '#F59E0B1A',
-                },
-              ]}
-            >
-              <AppIcon
-                name="camera"
-                size={18}
-                color={isEnrolled ? theme.colors.success : theme.colors.warning}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <View style={styles.faceTitleRow}>
-                <Text style={styles.faceEnrollTitle}>Face Biometrics</Text>
-                <View
-                  style={[
-                    styles.enrolledBadge,
-                    {
-                      backgroundColor: isEnrolled ? '#10B98120' : '#F59E0B20',
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.enrolledBadgeText,
-                      { color: isEnrolled ? '#10B981' : '#F59E0B' },
-                    ]}
-                  >
-                    {isEnrolled ? 'Enrolled ✓' : 'Not Enrolled'}
-                  </Text>
-                </View>
+        {/* Unified Biometric Status & Enrollment Card */}
+        <View style={styles.biometricEnrollCard}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.cardHeaderLeft}>
+              <View style={styles.biometricHeaderIcon}>
+                <AppIcon name="shield-check" size={18} color={theme.colors.purple} />
               </View>
-              <Text style={styles.faceEnrollSub}>
-                {isEnrolled
-                  ? '128D AI Biometric Template active for EMP-1024'
-                  : 'No facial biometric enrolled yet. Tap to enroll.'}
-              </Text>
+              <View>
+                <Text style={styles.cardHeaderTitle}>Biometric Credentials</Text>
+                <Text style={styles.cardHeaderSub}>Face Recognition & Fingerprint</Text>
+              </View>
             </View>
+
+            <TouchableOpacity
+              style={styles.manageBtn}
+              onPress={() => {
+                refreshBiometrics();
+                setBiometricModalVisible(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.manageBtnText}>Manage / Enroll ▾</Text>
+            </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={[
-              styles.reEnrollBtn,
-              !isEnrolled && { backgroundColor: theme.colors.primaryLight },
-            ]}
-            onPress={() => setFaceRegisterModalVisible(true)}
-            activeOpacity={0.8}
-          >
-            <Text
-              style={[
-                styles.reEnrollText,
-                !isEnrolled && { color: '#FFFFFF', fontWeight: '700' },
-              ]}
+          {/* Biometrics Status Chips Row */}
+          <View style={styles.statusChipsContainer}>
+            {/* Face Status Chip */}
+            {/* <TouchableOpacity
+              style={styles.statusChip}
+              onPress={() => {
+                setBiometricModalVisible(true);
+              }}
+              activeOpacity={0.85}
             >
-              {isEnrolled ? 'Manage / Re-Enroll' : 'Enroll Face Profile'}
-            </Text>
-          </TouchableOpacity>
+              <View
+                style={[
+                  styles.chipIconWrap,
+                  { backgroundColor: isFaceEnrolled ? '#10B9811A' : '#F59E0B1A' },
+                ]}
+              >
+                <AppIcon
+                  name="camera"
+                  size={15}
+                  color={isFaceEnrolled ? theme.colors.success : theme.colors.warning}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.chipTitle}>Face ID (AI)</Text>
+                <Text
+                  style={[
+                    styles.chipStatus,
+                    { color: isFaceEnrolled ? theme.colors.success : theme.colors.warning },
+                  ]}
+                >
+                  {isFaceEnrolled ? 'Enrolled ✓' : 'Tap to Enroll'}
+                </Text>
+              </View>
+            </TouchableOpacity> */}
+
+            {/* Fingerprint Status Chip */}
+            <TouchableOpacity
+              style={styles.statusChip}
+              onPress={() => {
+                setBiometricModalVisible(true);
+              }}
+              activeOpacity={0.85}
+            >
+              <View
+                style={[
+                  styles.chipIconWrap,
+                  { backgroundColor: isFingerprintEnrolled ? '#10B9811A' : '#8B5CF61A' },
+                ]}
+              >
+                <AppIcon
+                  name="fingerprint"
+                  size={15}
+                  color={isFingerprintEnrolled ? theme.colors.success : theme.colors.purple}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.chipTitle}>Phone {biometryType}</Text>
+                <Text
+                  style={[
+                    styles.chipStatus,
+                    { color: isFingerprintEnrolled ? theme.colors.success : theme.colors.purple },
+                  ]}
+                >
+                  {isFingerprintEnrolled ? 'Device Ready ✓' : 'Settings Required'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Attendance Records List */}
         <AttendanceHistoryList records={records} />
       </ScrollView>
 
-      {/* Face Registration Modal */}
+      {/* Unified Biometric Enrollment Choice Modal */}
+      <BiometricEnrollmentModal
+        visible={biometricModalVisible}
+        faceProfile={faceProfile}
+        employeeName={currentUser?.displayName || 'Pratiksha Patel'}
+        onClose={() => {
+          setBiometricModalVisible(false);
+          refreshBiometrics();
+        }}
+        onOpenFaceEnrollment={() => {
+          setFaceRegisterModalVisible(true);
+        }}
+      />
+
+      {/* Face Registration Camera Modal */}
       <FaceRegistrationModal
         visible={faceRegisterModalVisible}
         employeeId="EMP-1024"
-        employeeName="Pratiksha Patel"
+        employeeName={currentUser?.displayName || 'Pratiksha Patel'}
         onClose={() => setFaceRegisterModalVisible(false)}
         onRegisteredSuccess={(newProf) => {
           setFaceProfile(newProf);
           setFaceRegisterModalVisible(false);
+          refreshBiometrics();
         }}
       />
     </View>
@@ -201,33 +297,35 @@ const styles = StyleSheet.create({
   topBarLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
     flex: 1,
-    marginRight: 8,
-  },
-  titleColumn: {
-    flex: 1,
+    marginRight: 10,
   },
   avatarWrap: {
     width: 38,
     height: 38,
-    borderRadius: 12,
-    backgroundColor: theme.colors.primaryLight,
-    justifyContent: 'center',
+    borderRadius: 19,
+    backgroundColor: theme.colors.primary,
+    borderWidth: 1.5,
+    borderColor: theme.colors.primaryLight,
     alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
   },
   avatarText: {
-    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '800',
-    fontSize: 14,
+    color: '#FFFFFF',
+  },
+  titleColumn: {
+    flex: 1,
   },
   brandTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '700',
     color: theme.colors.text,
   },
   brandSubtitle: {
-    fontSize: 11,
+    fontSize: 11.5,
     color: theme.colors.textSecondary,
     marginTop: 1,
   },
@@ -235,16 +333,17 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 24,
+    padding: 16,
+    paddingBottom: 32,
   },
   infoBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: theme.colors.surface,
-    marginHorizontal: 16,
-    marginBottom: 16,
+    borderRadius: theme.radius.md,
     padding: 12,
-    borderRadius: 14,
+    marginTop: 14,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: theme.colors.border,
     gap: 10,
@@ -252,82 +351,103 @@ const styles = StyleSheet.create({
   infoIconBox: {
     width: 32,
     height: 32,
-    borderRadius: 8,
-    backgroundColor: '#06B6D41A',
-    justifyContent: 'center',
+    borderRadius: 16,
+    backgroundColor: theme.colors.cyan + '1A',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   infoTitle: {
-    fontSize: 12.5,
+    fontSize: 13,
     fontWeight: '700',
     color: theme.colors.text,
   },
   infoSub: {
     fontSize: 11,
     color: theme.colors.textSecondary,
-    marginTop: 1,
+    marginTop: 2,
+    lineHeight: 15,
   },
-  faceEnrollCard: {
+  biometricEnrollCard: {
     backgroundColor: theme.colors.surface,
-    marginHorizontal: 16,
-    marginBottom: 16,
+    borderRadius: theme.radius.lg,
     padding: 14,
-    borderRadius: 16,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: theme.colors.border,
-    gap: 12,
   },
-  faceEnrollLeft: {
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  cardHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
+    flex: 1,
   },
-  faceIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: '#3B82F61A',
+  biometricHeaderIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: theme.colors.purpleBg,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
   },
-  faceTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  faceEnrollTitle: {
+  cardHeaderTitle: {
     fontSize: 14,
     fontWeight: '700',
     color: theme.colors.text,
   },
-  enrolledBadge: {
-    backgroundColor: '#10B98120',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  enrolledBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#10B981',
-  },
-  faceEnrollSub: {
-    fontSize: 11.5,
+  cardHeaderSub: {
+    fontSize: 11,
     color: theme.colors.textSecondary,
-    marginTop: 2,
+    marginTop: 1,
   },
-  reEnrollBtn: {
-    paddingVertical: 9,
-    borderRadius: 10,
+  manageBtn: {
     backgroundColor: theme.colors.surfaceLight,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: theme.colors.borderLight,
   },
-  reEnrollText: {
+  manageBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: theme.colors.primaryLight,
+  },
+  statusChipsContainer: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  statusChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    gap: 8,
+  },
+  chipIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipTitle: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     color: theme.colors.text,
+  },
+  chipStatus: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    marginTop: 1,
   },
 });

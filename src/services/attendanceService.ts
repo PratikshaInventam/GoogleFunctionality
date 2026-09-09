@@ -39,6 +39,8 @@ export const submitPunchRecord = async (params: {
   distanceFromOffice: number;
   locationName: string;
   userCoords?: DeviceLocationCoordinates;
+  biometricSignature?: string;
+  biometricPayload?: string;
 }): Promise<AttendanceRecord> => {
   // Simulate API delay
   await new Promise<void>((resolve) => setTimeout(() => resolve(), 800));
@@ -59,6 +61,8 @@ export const submitPunchRecord = async (params: {
     status: 'PRESENT',
     locationName: params.locationName,
     userCoordinates: params.userCoords,
+    biometricSignature: params.biometricSignature,
+    biometricPayload: params.biometricPayload,
   };
 
   return record;
