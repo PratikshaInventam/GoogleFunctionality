@@ -55,7 +55,9 @@ export const usePunchLocation = (options?: UsePunchLocationOptions) => {
     async (
       locInfo: ValidatedLocationInfo,
       mode: PunchVerificationMode,
-      punchType: PunchType
+      punchType: PunchType,
+      signature?: string,
+      payload?: string
     ) => {
       setStatus('punching');
       try {
@@ -67,6 +69,8 @@ export const usePunchLocation = (options?: UsePunchLocationOptions) => {
           distanceFromOffice: locInfo.distanceMeters,
           locationName: locInfo.officeLocation.name,
           userCoords: locInfo.userCoords,
+          biometricSignature: signature,
+          biometricPayload: payload,
         });
 
         setStatus('success');
@@ -80,6 +84,8 @@ export const usePunchLocation = (options?: UsePunchLocationOptions) => {
           verificationMethod: mode,
           punchType,
           timestamp: new Date().toLocaleTimeString(),
+          biometricSignature: signature,
+          biometricPayload: payload,
         });
 
         if (options?.onSuccess) {
@@ -219,17 +225,20 @@ export const usePunchLocation = (options?: UsePunchLocationOptions) => {
     }
   }, [employeeId, employeeName, currentPunchType, validatedLocationInfo, options]);
 
-  const handleFingerprintSuccess = useCallback(() => {
-    setIsFingerprintModalVisible(false);
-    const loc = validatedLocationRef.current || validatedLocationInfo;
-    const pType = currentPunchTypeRef.current || currentPunchType;
-    if (loc) {
-      submitPunch(loc, 'FINGERPRINT', pType);
-    } else {
-      isExecutingRef.current = false;
-      setStatus('idle');
-    }
-  }, [validatedLocationInfo, currentPunchType, submitPunch]);
+  const handleFingerprintSuccess = useCallback(
+    (signature?: string, payload?: string) => {
+      setIsFingerprintModalVisible(false);
+      const loc = validatedLocationRef.current || validatedLocationInfo;
+      const pType = currentPunchTypeRef.current || currentPunchType;
+      if (loc) {
+        submitPunch(loc, 'FINGERPRINT', pType, signature, payload);
+      } else {
+        isExecutingRef.current = false;
+        setStatus('idle');
+      }
+    },
+    [validatedLocationInfo, currentPunchType, submitPunch]
+  );
 
   const handleFingerprintFailed = useCallback(() => {
     setIsFingerprintModalVisible(false);

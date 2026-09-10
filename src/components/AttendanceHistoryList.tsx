@@ -74,9 +74,19 @@ export const AttendanceHistoryList: React.FC<AttendanceHistoryListProps> = ({
                 ⚠️ {item.failureReason}
               </Text>
             ) : (
-              <Text style={styles.locationSub} numberOfLines={1}>
-                {item.locationName} ({formatDistance(item.distanceFromOffice)})
-              </Text>
+              <>
+                <Text style={styles.locationSub} numberOfLines={1}>
+                  {item.locationName} ({formatDistance(item.distanceFromOffice)})
+                </Text>
+                {item.biometricSignature ? (
+                  <View style={styles.signatureRow}>
+                    <Text style={styles.signatureTag}>🔒 Keystore Signed</Text>
+                    <Text style={styles.signatureSnippet} numberOfLines={1}>
+                      {item.biometricSignature.slice(0, 16)}…
+                    </Text>
+                  </View>
+                ) : null}
+              </>
             )}
           </View>
         </View>
@@ -226,5 +236,26 @@ const styles = StyleSheet.create({
     color: '#10B981',
     fontSize: 11,
     fontWeight: '800',
+  },
+  signatureRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 3,
+  },
+  signatureTag: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: theme.colors.purple,
+    backgroundColor: '#8B5CF61A',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  signatureSnippet: {
+    fontSize: 9.5,
+    color: theme.colors.textMuted,
+    fontFamily: 'monospace',
+    maxWidth: 120,
   },
 });

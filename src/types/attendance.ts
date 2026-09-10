@@ -23,6 +23,8 @@ export interface PunchResultInfo {
   verificationMethod?: PunchVerificationMode;
   punchType?: PunchType;
   timestamp?: string;
+  biometricSignature?: string;
+  biometricPayload?: string;
 }
 
 export interface AttendanceRecord {
@@ -40,4 +42,6 @@ export interface AttendanceRecord {
   userCoordinates?: DeviceLocationCoordinates;
   failureReason?: string;
   similarityScore?: number;
+  biometricSignature?: string;
+  biometricPayload?: string;
 }

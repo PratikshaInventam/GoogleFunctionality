@@ -6,6 +6,11 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
+import android.content.Intent
+import android.provider.Settings
+import android.os.Build
+import android.hardware.biometrics.BiometricManager
+import android.content.Context
 import com.facebook.react.bridge.*
 import java.io.File
 import java.io.InputStream
@@ -17,6 +22,115 @@ class FaceBiometricsModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName(): String {
         return "FaceBiometricsNative"
+    }
+
+    /**
+     * Directly opens the phone's hardware biometric/security settings so user can add or manage fingerprints.
+     *
+     * Smart routing:
+     * - If fingerprints already enrolled → FingerprintManageSetting (manage/add more)
+     * - If no fingerprints enrolled      → BiometricEnrollActivity (enrollment wizard)
+     * - Fallback                         → Lock screen settings page
+     */
+    @ReactMethod
+    fun openSecuritySettings(promise: Promise) {
+        try {
+            val activity = reactContext.currentActivity
+            var started = false
+
+            // Check if fingerprints are already enrolled using BiometricManager
+            val hasEnrolledFingerprints = try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val bm = reactContext.getSystemService(Context.BIOMETRIC_SERVICE) as? BiometricManager
+                    val result = bm?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    result == BiometricManager.BIOMETRIC_SUCCESS
+                } else false
+            } catch (e: Exception) { false }
+
+            if (activity != null) {
+                if (hasEnrolledFingerprints) {
+                    // ── Fingerprints EXIST ──────────────────────────────────────────────
+                    // Open FingerprintManageSetting directly (the "Fingerprints" management page)
+                    // BiometricEnrollActivity self-closes with 'Unexpected result (has enrollments)'
+                    val manageIntents = mutableListOf<Intent>()
+
+                    // Direct fingerprint management activity (Xiaomi/AOSP)
+                    manageIntents.add(
+                        Intent().setClassName("com.android.settings", "com.android.settings.FingerprintManageSetting")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    // Xiaomi Lock screen page (has "Fingerprints, face data, and screen lock" link)
+                    manageIntents.add(
+                        Intent().setClassName("com.android.settings", "com.android.settings.SubSettings")
+                            .putExtra(":android:show_fragment", "com.android.settings.AodAndLockScreenSettings")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    // Standard lock screen settings
+                    manageIntents.add(Intent("android.settings.LOCK_SCREEN_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    // Security settings fallback
+                    manageIntents.add(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+
+                    for (intent in manageIntents) {
+                        try {
+                            activity.startActivity(intent)
+                            started = true
+                            break
+                        } catch (e: Exception) {
+                            // try next
+                        }
+                    }
+                } else {
+                    // ── No Fingerprints YET ─────────────────────────────────────────────
+                    // Open BiometricEnrollActivity (fingerprint enrollment wizard)
+                    // Must use startActivityForResult to keep it from self-closing
+                    try {
+                        val enrollIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            Intent(Settings.ACTION_BIOMETRIC_ENROLL).apply {
+                                putExtra(
+                                    Settings.EXTRA_BIOMETRIC_AUTHENTICATORS_ALLOWED,
+                                    android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG
+                                )
+                            }
+                        } else {
+                            Intent("android.settings.BIOMETRIC_ENROLL")
+                        }
+                        activity.startActivityForResult(enrollIntent, 9001)
+                        started = true
+                    } catch (e: Exception) {
+                        // Enrollment not available — fall through to lock screen settings
+                    }
+                }
+            }
+
+            // Fallback: open Xiaomi/HyperOS Lock screen settings page if nothing worked
+            if (!started) {
+                val fallbackList = mutableListOf<Intent>()
+                fallbackList.add(
+                    Intent().setClassName("com.android.settings", "com.android.settings.SubSettings")
+                        .putExtra(":android:show_fragment", "com.android.settings.AodAndLockScreenSettings")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                fallbackList.add(Intent("android.settings.LOCK_SCREEN_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                fallbackList.add(Intent().setClassName("com.android.settings", "com.android.settings.Settings\$PasswordsAndSecuritySettingsActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                fallbackList.add(Intent().setClassName("com.android.settings", "com.android.settings.Settings\$PasswordAndSecuritySettingsActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                fallbackList.add(Intent("com.samsung.android.settings.fingerprint.FingerprintSettings").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                fallbackList.add(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+
+                for (intent in fallbackList) {
+                    try {
+                        val ctx = activity ?: reactContext
+                        if (activity != null) activity.startActivity(intent)
+                        else reactContext.startActivity(intent)
+                        started = true
+                        break
+                    } catch (e: Exception) { /* try next */ }
+                }
+            }
+
+            promise.resolve(started)
+        } catch (e: Exception) {
+            promise.reject("OPEN_SETTINGS_FAILED", e.message, e)
+        }
     }
 
     /**

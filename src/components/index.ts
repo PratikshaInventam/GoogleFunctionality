@@ -8,3 +8,5 @@ export * from './OutsideLocationModal';
 export * from './PermissionModal';
 export * from './AttendanceSummaryCard';
 export * from './AttendanceHistoryList';
+export * from './UserProfileHeader';
+export * from './BiometricEnrollmentModal';
